@@ -2,7 +2,7 @@
 
 A minimalist, drag-and-drop todo application with categories and a beautiful, clean interface.
 
-[cloudflarebutton]
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/khoshimov2018/clarity)
 
 Clarity is a visually stunning, minimalist todo application designed for focus and organization. It allows users to manage their tasks within customizable categories. The core feature is an intuitive drag-and-drop interface for reordering tasks both within and between categories. The application features a serene, clean aesthetic with polished micro-interactions, seamless theme switching between light and dark modes, and a responsive layout that works beautifully across all devices. The goal is to provide a delightful and frictionless task management experience.
 
@@ -99,7 +99,7 @@ This command will build the frontend application, bundle the worker code, and de
 
 Alternatively, you can deploy directly from your GitHub repository:
 
-[cloudflarebutton]
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/khoshimov2018/clarity)
 
 ## 📄 License
 
