@@ -12,7 +12,7 @@ import {
 } from '@dnd-kit/core';
 import { arrayMove } from '@dnd-kit/sortable';
 import { createPortal } from 'react-dom';
-import { Plus, GripVertical } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { useTaskStore } from '@/store/taskStore';
 import { CategoryColumn } from '@/components/CategoryColumn';
 import { TaskCard } from '@/components/TaskCard';
@@ -21,7 +21,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Toaster } from '@/components/ui/sonner';
-import type { Task, Category } from '@shared/types';
+import type { Task } from '@shared/types';
 export function HomePage() {
   const fetchData = useTaskStore((s) => s.fetchData);
   const tasks = useTaskStore((s) => s.tasks);
@@ -72,78 +72,74 @@ export function HomePage() {
   function onDragOver(event: DragOverEvent) {
     const { active, over } = event;
     if (!over) return;
-    const activeId = active.id;
-    const overId = over.id;
+    const activeId = String(active.id);
+    const overId = String(over.id);
     if (activeId === overId) return;
     const isActiveATask = active.data.current?.type === 'Task';
     const isOverATask = over.data.current?.type === 'Task';
     if (!isActiveATask) return;
-    // Dropping a Task over another Task
-    if (isActiveATask && isOverATask) {
-      setTasks(
-        arrayMove(tasks, tasks.findIndex(t => t.id === activeId), tasks.findIndex(t => t.id === overId))
-      );
-    }
-    // Dropping a Task over a Category
-    const isOverACategory = over.data.current?.type === 'Category';
-    if (isActiveATask && isOverACategory) {
-      const activeIndex = tasks.findIndex((t) => t.id === activeId);
-      tasks[activeIndex].categoryId = String(overId);
-      setTasks(arrayMove(tasks, activeIndex, activeIndex));
-    }
+    // This function provides instant visual feedback while dragging.
+    // The final reordering logic is in onDragEnd.
+    setTasks(currentTasks => {
+      const activeIndex = currentTasks.findIndex(t => t.id === activeId);
+      const overIndex = currentTasks.findIndex(t => t.id === overId);
+      const activeTask = currentTasks[activeIndex];
+      if (isOverATask) {
+        // Dragging a task over another task
+        if (activeTask.categoryId !== currentTasks[overIndex].categoryId) {
+          // Change category and move to the position of the task being hovered over
+          const newTasks = [...currentTasks];
+          newTasks[activeIndex] = { ...activeTask, categoryId: currentTasks[overIndex].categoryId };
+          return arrayMove(newTasks, activeIndex, overIndex);
+        }
+        // Just reorder within the same category
+        return arrayMove(currentTasks, activeIndex, overIndex);
+      }
+      const isOverACategory = over.data.current?.type === 'Category';
+      if (isOverACategory) {
+        // Dragging a task over a category column
+        if (activeTask.categoryId !== overId) {
+          const newTasks = [...currentTasks];
+          newTasks[activeIndex] = { ...activeTask, categoryId: overId };
+          return newTasks;
+        }
+      }
+      return currentTasks;
+    });
   }
   function onDragEnd(event: DragEndEvent) {
     setActiveTask(null);
     const { active, over } = event;
-    if (!over || active.id === over.id) return;
-    const activeTask = tasks.find(t => t.id === active.id);
+    if (!over) return;
+    const activeId = String(active.id);
+    const overId = String(over.id);
+    if (activeId === overId) return;
+    const activeTask = tasks.find(t => t.id === activeId);
     if (!activeTask) return;
-    const overCategory = over.data.current?.type === 'Category' ? over.data.current.category : null;
-    const overTask = over.data.current?.type === 'Task' ? over.data.current.task : null;
-    const newCategoryId = overCategory?.id || overTask?.categoryId;
-    if (!newCategoryId) return;
-    const tasksInNewCategory = tasks.filter(t => t.categoryId === newCategoryId);
-    let newOrder = 0;
-    if (overTask) {
-        const overIndex = tasksInNewCategory.findIndex(t => t.id === overTask.id);
-        newOrder = overIndex;
-    } else {
-        newOrder = tasksInNewCategory.length;
+    // Use the current state from the store for final calculation
+    const finalTasks = useTaskStore.getState().tasks;
+    const tasksToUpdate: Pick<Task, 'id' | 'order' | 'categoryId'>[] = [];
+    // Re-index all tasks based on their visual order in the UI
+    categories.forEach(category => {
+      const tasksInCategory = finalTasks
+        .filter(t => t.categoryId === category.id)
+        .sort((a, b) => a.order - b.order); // Sort by last known order
+      tasksInCategory.forEach((task, index) => {
+        if (task.order !== index || task.categoryId !== category.id) {
+          tasksToUpdate.push({ id: task.id, order: index, categoryId: category.id });
+        }
+      });
+    });
+    if (tasksToUpdate.length > 0) {
+      reorderTasks(tasksToUpdate.map(t => ({...tasks.find(original => original.id === t.id)!, ...t})));
     }
-    const tasksToUpdate: Task[] = [];
-    const movedTask = { ...activeTask, categoryId: newCategoryId, order: newOrder };
-    tasksToUpdate.push(movedTask);
-    const oldCategoryId = activeTask.categoryId;
-    // Re-order tasks in old category
-    tasks.filter(t => t.categoryId === oldCategoryId && t.id !== active.id)
-        .sort((a, b) => a.order - b.order)
-        .forEach((task, index) => {
-            if (task.order !== index) {
-                tasksToUpdate.push({ ...task, order: index });
-            }
-        });
-    // Re-order tasks in new category
-    tasks.filter(t => t.categoryId === newCategoryId && t.id !== active.id)
-        .sort((a, b) => a.order - b.order)
-        .reduce((acc, task) => {
-            if (acc.order === newOrder) {
-                acc.order++;
-            }
-            if (task.order !== acc.order) {
-                tasksToUpdate.push({ ...task, order: acc.order });
-            }
-            acc.tasks.push(task);
-            acc.order++;
-            return acc;
-        }, { tasks: [] as Task[], order: 0 });
-    reorderTasks(tasksToUpdate);
   }
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground font-sans">
       <header className="p-4 border-b sticky top-0 bg-background/80 backdrop-blur-sm z-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between gap-8">
-            <h1 className="text-2xl font-bold text-primary">Clarity</h1>
+            <h1 className="text-2xl font-bold text-primary font-display">Clarity</h1>
             <div className="flex-1 flex items-center gap-2 max-w-md">
               <Input
                 placeholder="Add a new task..."
