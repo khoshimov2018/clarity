@@ -1,75 +1,63 @@
 import { Hono } from "hono";
 import type { Env } from './core-utils';
-import { UserEntity, ChatBoardEntity } from "./entities";
+import { TaskEntity, CategoryEntity } from "./entities";
 import { ok, bad, notFound, isStr } from './core-utils';
-
+import type { Task, Category } from "@shared/types";
 export function userRoutes(app: Hono<{ Bindings: Env }>) {
-  app.get('/api/test', (c) => c.json({ success: true, data: { name: 'CF Workers Demo' }}));
-
-  // USERS
-  app.get('/api/users', async (c) => {
-    await UserEntity.ensureSeed(c.env);
-    const cq = c.req.query('cursor');
-    const lq = c.req.query('limit');
-    const page = await UserEntity.list(c.env, cq ?? null, lq ? Math.max(1, (Number(lq) | 0)) : undefined);
-    return ok(c, page);
+  // CATEGORIES
+  app.get('/api/categories', async (c) => {
+    await CategoryEntity.ensureSeed(c.env);
+    const { items } = await CategoryEntity.list(c.env);
+    return ok(c, items);
   });
-
-  app.post('/api/users', async (c) => {
+  app.post('/api/categories', async (c) => {
     const { name } = (await c.req.json()) as { name?: string };
-    if (!name?.trim()) return bad(c, 'name required');
-    return ok(c, await UserEntity.create(c.env, { id: crypto.randomUUID(), name: name.trim() }));
+    if (!isStr(name)) return bad(c, 'name is required');
+    const newCategory: Category = { id: crypto.randomUUID(), name };
+    await CategoryEntity.create(c.env, newCategory);
+    return ok(c, newCategory);
   });
-
-  // CHATS
-  app.get('/api/chats', async (c) => {
-    await ChatBoardEntity.ensureSeed(c.env);
-    const cq = c.req.query('cursor');
-    const lq = c.req.query('limit');
-    const page = await ChatBoardEntity.list(c.env, cq ?? null, lq ? Math.max(1, (Number(lq) | 0)) : undefined);
-    return ok(c, page);
+  // TASKS
+  app.get('/api/tasks', async (c) => {
+    const { items } = await TaskEntity.list(c.env);
+    return ok(c, items);
   });
-
-  app.post('/api/chats', async (c) => {
-    const { title } = (await c.req.json()) as { title?: string };
-    if (!title?.trim()) return bad(c, 'title required');
-    const created = await ChatBoardEntity.create(c.env, { id: crypto.randomUUID(), title: title.trim(), messages: [] });
-    return ok(c, { id: created.id, title: created.title });
+  app.post('/api/tasks', async (c) => {
+    const { content, categoryId, order } = (await c.req.json()) as Partial<Task>;
+    if (!isStr(content) || !isStr(categoryId) || typeof order !== 'number') {
+      return bad(c, 'content, categoryId, and order are required');
+    }
+    const newTask: Task = { id: crypto.randomUUID(), content, categoryId, order, completed: false };
+    await TaskEntity.create(c.env, newTask);
+    return ok(c, newTask);
   });
-
-  // MESSAGES
-  app.get('/api/chats/:chatId/messages', async (c) => {
-    const chat = new ChatBoardEntity(c.env, c.req.param('chatId'));
-    if (!await chat.exists()) return notFound(c, 'chat not found');
-    return ok(c, await chat.listMessages());
+  app.put('/api/tasks/:id', async (c) => {
+    const { id } = c.req.param();
+    const taskUpdate = (await c.req.json()) as Partial<Task>;
+    const task = new TaskEntity(c.env, id);
+    if (!(await task.exists())) return notFound(c, 'Task not found');
+    await task.patch(taskUpdate);
+    return ok(c, await task.getState());
   });
-
-  app.post('/api/chats/:chatId/messages', async (c) => {
-    const chatId = c.req.param('chatId');
-    const { userId, text } = (await c.req.json()) as { userId?: string; text?: string };
-    if (!isStr(userId) || !text?.trim()) return bad(c, 'userId and text required');
-    const chat = new ChatBoardEntity(c.env, chatId);
-    if (!await chat.exists()) return notFound(c, 'chat not found');
-    return ok(c, await chat.sendMessage(userId, text.trim()));
+  app.delete('/api/tasks/:id', async (c) => {
+    const { id } = c.req.param();
+    const deleted = await TaskEntity.delete(c.env, id);
+    if (!deleted) return notFound(c, 'Task not found');
+    return ok(c, { id, deleted });
   });
-
-  // DELETE: Users
-  app.delete('/api/users/:id', async (c) => ok(c, { id: c.req.param('id'), deleted: await UserEntity.delete(c.env, c.req.param('id')) }));
-
-  app.post('/api/users/deleteMany', async (c) => {
-    const { ids } = (await c.req.json()) as { ids?: string[] };
-    const list = ids?.filter(isStr) ?? [];
-    if (list.length === 0) return bad(c, 'ids required');
-    return ok(c, { deletedCount: await UserEntity.deleteMany(c.env, list), ids: list });
-  });
-
-  // DELETE: Chats
-  app.delete('/api/chats/:id', async (c) => ok(c, { id: c.req.param('id'), deleted: await ChatBoardEntity.delete(c.env, c.req.param('id')) }));
-
-  app.post('/api/chats/deleteMany', async (c) => {
-    const { ids } = (await c.req.json()) as { ids?: string[] };
-    const list = ids?.filter(isStr) ?? [];
-    if (list.length === 0) return bad(c, 'ids required');
-    return ok(c, { deletedCount: await ChatBoardEntity.deleteMany(c.env, list), ids: list });
+  app.post('/api/tasks/reorder', async (c) => {
+    const { tasks } = (await c.req.json()) as { tasks: Pick<Task, 'id' | 'order' | 'categoryId'>[] };
+    if (!Array.isArray(tasks)) return bad(c, 'tasks array is required');
+    const updatedTasks = await Promise.all(
+      tasks.map(async (taskUpdate) => {
+        const task = new TaskEntity(c.env, taskUpdate.id);
+        if (await task.exists()) {
+          await task.patch({ order: taskUpdate.order, categoryId: taskUpdate.categoryId });
+          return task.getState();
+        }
+        return null;
+      })
+    );
+    return ok(c, updatedTasks.filter(Boolean));
   });
 }

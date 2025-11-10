@@ -1,148 +1,216 @@
-// Home page of the app, Currently a demo page for demonstration.
-// Please rewrite this file to implement your own logic. Do not replace or delete it, simply rewrite this HomePage.tsx file.
-import { useEffect } from 'react'
-import { Sparkles } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { ThemeToggle } from '@/components/ThemeToggle'
-import { Toaster, toast } from '@/components/ui/sonner'
-import { create } from 'zustand'
-import { useShallow } from 'zustand/react/shallow'
-import { AppLayout } from '@/components/layout/AppLayout'
-
-// Timer store: independent slice with a clear, minimal API, for demonstration
-type TimerState = {
-  isRunning: boolean;
-  elapsedMs: number;
-  start: () => void;
-  pause: () => void;
-  reset: () => void;
-  tick: (deltaMs: number) => void;
-}
-
-const useTimerStore = create<TimerState>((set) => ({
-  isRunning: false,
-  elapsedMs: 0,
-  start: () => set({ isRunning: true }),
-  pause: () => set({ isRunning: false }),
-  reset: () => set({ elapsedMs: 0, isRunning: false }),
-  tick: (deltaMs) => set((s) => ({ elapsedMs: s.elapsedMs + deltaMs })),
-}))
-
-// Counter store: separate slice to showcase multiple stores without coupling
-type CounterState = {
-  count: number;
-  inc: () => void;
-  reset: () => void;
-}
-
-const useCounterStore = create<CounterState>((set) => ({
-  count: 0,
-  inc: () => set((s) => ({ count: s.count + 1 })),
-  reset: () => set({ count: 0 }),
-}))
-
-function formatDuration(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000))
-  const m = Math.floor(total / 60)
-  const s = total % 60
-  return `${m}:${s.toString().padStart(2, '0')}`
-}
-
+import { useEffect, useState, useMemo } from 'react';
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  closestCorners,
+  DragStartEvent,
+  DragOverEvent,
+  DragEndEvent,
+} from '@dnd-kit/core';
+import { arrayMove } from '@dnd-kit/sortable';
+import { createPortal } from 'react-dom';
+import { Plus, GripVertical } from 'lucide-react';
+import { useTaskStore } from '@/store/taskStore';
+import { CategoryColumn } from '@/components/CategoryColumn';
+import { TaskCard } from '@/components/TaskCard';
+import { ThemeToggle } from '@/components/ThemeToggle';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Toaster } from '@/components/ui/sonner';
+import type { Task, Category } from '@shared/types';
 export function HomePage() {
-  // Select only what is needed to avoid unnecessary re-renders
-  const { isRunning, elapsedMs } = useTimerStore(
-    useShallow((s) => ({ isRunning: s.isRunning, elapsedMs: s.elapsedMs })),
-  )
-  const start = useTimerStore((s) => s.start)
-  const pause = useTimerStore((s) => s.pause)
-  const resetTimer = useTimerStore((s) => s.reset)
-  const count = useCounterStore((s) => s.count)
-  const inc = useCounterStore((s) => s.inc)
-  const resetCount = useCounterStore((s) => s.reset)
-
-  // Drive the timer only while running; avoid update-depth issues with a scoped RAF
+  const fetchData = useTaskStore((s) => s.fetchData);
+  const tasks = useTaskStore((s) => s.tasks);
+  const categories = useTaskStore((s) => s.categories);
+  const isLoading = useTaskStore((s) => s.isLoading);
+  const addTask = useTaskStore((s) => s.addTask);
+  const addCategory = useTaskStore((s) => s.addCategory);
+  const setTasks = useTaskStore((s) => s.setTasks);
+  const reorderTasks = useTaskStore((s) => s.reorderTasks);
+  const [activeTask, setActiveTask] = useState<Task | null>(null);
+  const [newTaskContent, setNewTaskContent] = useState('');
+  const [newCategoryName, setNewCategoryName] = useState('');
   useEffect(() => {
-    if (!isRunning) return
-    let raf = 0
-    let last = performance.now()
-    const loop = () => {
-      const now = performance.now()
-      const delta = now - last
-      last = now
-      // Read store API directly to keep effect deps minimal and stable
-      useTimerStore.getState().tick(delta)
-      raf = requestAnimationFrame(loop)
+    fetchData();
+  }, [fetchData]);
+  const tasksByCategoryId = useMemo(() => {
+    return categories.reduce((acc, category) => {
+      acc[category.id] = tasks
+        .filter((task) => task.categoryId === category.id)
+        .sort((a, b) => a.order - b.order);
+      return acc;
+    }, {} as Record<string, Task[]>);
+  }, [tasks, categories]);
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 10,
+      },
+    })
+  );
+  const handleAddTask = () => {
+    if (newTaskContent.trim() && categories.length > 0) {
+      addTask(newTaskContent.trim(), categories[0].id);
+      setNewTaskContent('');
     }
-    raf = requestAnimationFrame(loop)
-    return () => cancelAnimationFrame(raf)
-  }, [isRunning])
-
-  const onPleaseWait = () => {
-    inc()
-    if (!isRunning) {
-      start()
-      toast.success('Building your app…', {
-        description: 'Hang tight, we\'re setting everything up.',
-      })
-    } else {
-      pause()
-      toast.info('Taking a short pause', {
-        description: 'We\'ll continue shortly.',
-      })
+  };
+  const handleAddCategory = () => {
+    if (newCategoryName.trim()) {
+      addCategory(newCategoryName.trim());
+      setNewCategoryName('');
+    }
+  };
+  function onDragStart(event: DragStartEvent) {
+    if (event.active.data.current?.type === 'Task') {
+      setActiveTask(event.active.data.current.task);
     }
   }
-
-  const formatted = formatDuration(elapsedMs)
-
+  function onDragOver(event: DragOverEvent) {
+    const { active, over } = event;
+    if (!over) return;
+    const activeId = active.id;
+    const overId = over.id;
+    if (activeId === overId) return;
+    const isActiveATask = active.data.current?.type === 'Task';
+    const isOverATask = over.data.current?.type === 'Task';
+    if (!isActiveATask) return;
+    // Dropping a Task over another Task
+    if (isActiveATask && isOverATask) {
+      setTasks(
+        arrayMove(tasks, tasks.findIndex(t => t.id === activeId), tasks.findIndex(t => t.id === overId))
+      );
+    }
+    // Dropping a Task over a Category
+    const isOverACategory = over.data.current?.type === 'Category';
+    if (isActiveATask && isOverACategory) {
+      const activeIndex = tasks.findIndex((t) => t.id === activeId);
+      tasks[activeIndex].categoryId = String(overId);
+      setTasks(arrayMove(tasks, activeIndex, activeIndex));
+    }
+  }
+  function onDragEnd(event: DragEndEvent) {
+    setActiveTask(null);
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const activeTask = tasks.find(t => t.id === active.id);
+    if (!activeTask) return;
+    const overCategory = over.data.current?.type === 'Category' ? over.data.current.category : null;
+    const overTask = over.data.current?.type === 'Task' ? over.data.current.task : null;
+    const newCategoryId = overCategory?.id || overTask?.categoryId;
+    if (!newCategoryId) return;
+    const tasksInNewCategory = tasks.filter(t => t.categoryId === newCategoryId);
+    let newOrder = 0;
+    if (overTask) {
+        const overIndex = tasksInNewCategory.findIndex(t => t.id === overTask.id);
+        newOrder = overIndex;
+    } else {
+        newOrder = tasksInNewCategory.length;
+    }
+    const tasksToUpdate: Task[] = [];
+    const movedTask = { ...activeTask, categoryId: newCategoryId, order: newOrder };
+    tasksToUpdate.push(movedTask);
+    const oldCategoryId = activeTask.categoryId;
+    // Re-order tasks in old category
+    tasks.filter(t => t.categoryId === oldCategoryId && t.id !== active.id)
+        .sort((a, b) => a.order - b.order)
+        .forEach((task, index) => {
+            if (task.order !== index) {
+                tasksToUpdate.push({ ...task, order: index });
+            }
+        });
+    // Re-order tasks in new category
+    tasks.filter(t => t.categoryId === newCategoryId && t.id !== active.id)
+        .sort((a, b) => a.order - b.order)
+        .reduce((acc, task) => {
+            if (acc.order === newOrder) {
+                acc.order++;
+            }
+            if (task.order !== acc.order) {
+                tasksToUpdate.push({ ...task, order: acc.order });
+            }
+            acc.tasks.push(task);
+            acc.order++;
+            return acc;
+        }, { tasks: [] as Task[], order: 0 });
+    reorderTasks(tasksToUpdate);
+  }
   return (
-    <AppLayout>
-      <div className="min-h-screen flex flex-col items-center justify-center bg-background text-foreground p-4 overflow-hidden relative">
-        <ThemeToggle />
-        <div className="absolute inset-0 bg-gradient-rainbow opacity-10 dark:opacity-20 pointer-events-none" />
-        <div className="text-center space-y-8 relative z-10 animate-fade-in">
-          <div className="flex justify-center">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-primary flex items-center justify-center shadow-primary floating">
-              <Sparkles className="w-8 h-8 text-white rotating" />
+    <div className="min-h-screen flex flex-col bg-background text-foreground font-sans">
+      <header className="p-4 border-b sticky top-0 bg-background/80 backdrop-blur-sm z-10">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between gap-8">
+            <h1 className="text-2xl font-bold text-primary">Clarity</h1>
+            <div className="flex-1 flex items-center gap-2 max-w-md">
+              <Input
+                placeholder="Add a new task..."
+                value={newTaskContent}
+                onChange={(e) => setNewTaskContent(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleAddTask()}
+              />
+              <Button onClick={handleAddTask} disabled={!newTaskContent.trim()}>
+                <Plus className="h-4 w-4 mr-2" /> Add Task
+              </Button>
             </div>
-          </div>
-          <h1 className="text-5xl md:text-7xl font-display font-bold text-balance leading-tight">
-            Creating your <span className="text-gradient">app</span>
-          </h1>
-          <p className="text-lg md:text-xl text-muted-foreground max-w-xl mx-auto text-pretty">
-            Your application would be ready soon.
-          </p>
-          <div className="flex justify-center gap-4">
-            <Button 
-              size="lg"
-              onClick={onPleaseWait}
-              className="btn-gradient px-8 py-4 text-lg font-semibold hover:-translate-y-0.5 transition-all duration-200"
-              aria-live="polite"
-            >
-              Please Wait
-            </Button>
-          </div>
-          <div className="flex items-center justify-center gap-6 text-sm text-muted-foreground">
-            <div>
-              Time elapsed: <span className="font-medium tabular-nums text-foreground">{formatted}</span>
+            <div className="flex items-center gap-2">
+               <Input
+                placeholder="New category name..."
+                value={newCategoryName}
+                onChange={(e) => setNewCategoryName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleAddCategory()}
+              />
+              <Button onClick={handleAddCategory} variant="outline" disabled={!newCategoryName.trim()}>
+                <Plus className="h-4 w-4 mr-2" /> Add Category
+              </Button>
             </div>
-            <div>
-              Coins: <span className="font-medium tabular-nums text-foreground">{count}</span>
-            </div>
-          </div>
-          <div className="flex justify-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => { resetTimer(); resetCount(); toast('Reset complete') }}>
-              Reset
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => { inc(); toast('Coin added') }}>
-              Add Coin
-            </Button>
+            <ThemeToggle className="relative top-0 right-0" />
           </div>
         </div>
-        <footer className="absolute bottom-8 text-center text-muted-foreground/80">
-          <p>Powered by Cloudflare</p>
-        </footer>
-        <Toaster richColors closeButton />
-      </div>
-    </AppLayout>
-  )
+      </header>
+      <main className="flex-1 overflow-x-auto overflow-y-hidden p-4">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-full">
+          <DndContext
+            sensors={sensors}
+            onDragStart={onDragStart}
+            onDragOver={onDragOver}
+            onDragEnd={onDragEnd}
+            collisionDetection={closestCorners}
+          >
+            <div className="flex gap-4 h-full pb-4">
+              {isLoading ? (
+                Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="w-80 flex-shrink-0">
+                    <Skeleton className="h-12 w-full mb-4" />
+                    <div className="space-y-2">
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                    </div>
+                  </div>
+                ))
+              ) : (
+                categories.map((category) => (
+                  <CategoryColumn
+                    key={category.id}
+                    category={category}
+                    tasks={tasksByCategoryId[category.id] || []}
+                  />
+                ))
+              )}
+            </div>
+            {createPortal(
+              <DragOverlay>
+                {activeTask ? <TaskCard task={activeTask} /> : null}
+              </DragOverlay>,
+              document.body
+            )}
+          </DndContext>
+        </div>
+      </main>
+      <Toaster richColors />
+    </div>
+  );
 }
